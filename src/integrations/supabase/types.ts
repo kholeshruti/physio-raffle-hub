@@ -14,16 +14,115 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      app_settings: {
+        Row: {
+          batch_size: number
+          booking_closes_at: string
+          id: number
+          ticket_price: number
+        }
+        Insert: {
+          batch_size?: number
+          booking_closes_at?: string
+          id?: number
+          ticket_price?: number
+        }
+        Update: {
+          batch_size?: number
+          booking_closes_at?: string
+          id?: number
+          ticket_price?: number
+        }
+        Relationships: []
+      }
+      bookings: {
+        Row: {
+          amount: number
+          confirmed_at: string | null
+          created_at: string
+          held_until: string
+          id: string
+          phone: string
+          status: Database["public"]["Enums"]["booking_status"]
+          student_name: string
+          txn_ref: string | null
+        }
+        Insert: {
+          amount?: number
+          confirmed_at?: string | null
+          created_at?: string
+          held_until?: string
+          id?: string
+          phone: string
+          status?: Database["public"]["Enums"]["booking_status"]
+          student_name: string
+          txn_ref?: string | null
+        }
+        Update: {
+          amount?: number
+          confirmed_at?: string | null
+          created_at?: string
+          held_until?: string
+          id?: string
+          phone?: string
+          status?: Database["public"]["Enums"]["booking_status"]
+          student_name?: string
+          txn_ref?: string | null
+        }
+        Relationships: []
+      }
+      tickets: {
+        Row: {
+          booking_id: string
+          created_at: string
+          held_until: string | null
+          status: Database["public"]["Enums"]["booking_status"]
+          ticket_number: number
+        }
+        Insert: {
+          booking_id: string
+          created_at?: string
+          held_until?: string | null
+          status?: Database["public"]["Enums"]["booking_status"]
+          ticket_number: number
+        }
+        Update: {
+          booking_id?: string
+          created_at?: string
+          held_until?: string | null
+          status?: Database["public"]["Enums"]["booking_status"]
+          ticket_number?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tickets_booking_id_fkey"
+            columns: ["booking_id"]
+            isOneToOne: false
+            referencedRelation: "bookings"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      cancel_booking: { Args: { p_booking_id: string }; Returns: Json }
+      get_booking: { Args: { p_booking_id: string }; Returns: Json }
+      hold_tickets: {
+        Args: { p_name: string; p_numbers: number[]; p_phone: string }
+        Returns: Json
+      }
+      raffle_state: { Args: never; Returns: Json }
+      release_expired_holds: { Args: never; Returns: undefined }
+      submit_payment: {
+        Args: { p_booking_id: string; p_txn_ref: string }
+        Returns: Json
+      }
     }
     Enums: {
-      [_ in never]: never
+      booking_status: "held" | "pending" | "sold" | "rejected" | "expired"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +249,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      booking_status: ["held", "pending", "sold", "rejected", "expired"],
+    },
   },
 } as const
