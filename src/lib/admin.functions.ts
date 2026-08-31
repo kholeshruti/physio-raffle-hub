@@ -69,6 +69,8 @@ async function loadAdmin(search: string): Promise<AdminData> {
       .sort((a, b) => a - b),
   }));
 
+  const pendingTotal = bookings.filter((b) => b.status === "pending").length;
+
   const q = search.trim().toLowerCase();
   if (q) {
     bookings = bookings.filter(
@@ -81,8 +83,8 @@ async function loadAdmin(search: string): Promise<AdminData> {
   }
 
   const { count: soldCount } = await supabaseAdmin
-
     .from("tickets")
+
     .select("ticket_number", { count: "exact", head: true })
     .eq("status", "sold");
 
