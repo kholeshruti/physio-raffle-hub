@@ -80,10 +80,8 @@ async function loadAdmin(search: string): Promise<AdminData> {
     );
   }
 
-  const soldInBatch = bookings.length; // placeholder replaced below
-  void soldInBatch;
-
   const { count: soldCount } = await supabaseAdmin
+
     .from("tickets")
     .select("ticket_number", { count: "exact", head: true })
     .eq("status", "sold");
