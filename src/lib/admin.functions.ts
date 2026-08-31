@@ -95,14 +95,13 @@ async function loadAdmin(search: string): Promise<AdminData> {
     .gte("ticket_number", state.batch_start)
     .lte("ticket_number", state.batch_end);
 
-  const pending = bookings.filter((b) => b.status === "pending").length;
-
   return {
     stats: {
       sold: soldCount ?? 0,
       remaining: state.batch_size - (soldInCurrentBatch ?? 0),
       collected: (soldCount ?? 0) * state.ticket_price,
-      pending,
+      pending: pendingTotal,
+
       batch_number: state.batch_number,
       batch_start: state.batch_start,
       batch_end: state.batch_end,
