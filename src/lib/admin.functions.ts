@@ -8,6 +8,7 @@ export type AdminBooking = {
   txn_ref: string | null;
   amount: number;
   status: string;
+  created_at: string;
   numbers: number[];
 };
 
@@ -33,87 +34,39 @@ function checkPassword(input: string) {
   if (!timingSafeEqual(a, b)) throw new Error("Incorrect password.");
 }
 
-type AdminTicketRow = {
-  ticket_number: number;
-  batch_number: number;
-  status: string;
-  held_until: string | null;
-  student_name: string | null;
-  student_phone: string | null;
-  transaction_id: string | null;
-  confirmed_at: string | null;
-};
-
 async function loadAdmin(search: string): Promise<AdminData> {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
   await supabaseAdmin.rpc("release_expired_holds");
+  const { data: stateRaw } = await supabaseAdmin.rpc("raffle_state");
+  const state = stateRaw as unknown as {
+    ticket_price: number;
+    batch_size: number;
+    total_sold: number;
+    batch_start: number;
+    batch_end: number;
+    batch_number: number;
+  };
 
-  const { data: settingsRows } = await supabaseAdmin
-    .from("app_settings")
-    .select("key, value");
-  const settings: Record<string, string> = {};
-  for (const row of settingsRows ?? []) settings[row.key] = row.value;
-  const ticketPrice = parseInt(settings["ticket_price"] ?? "10", 10);
-  const batchSize = parseInt(settings["batch_size"] ?? "100", 10);
-
-  const { data: ticketRows, error } = await supabaseAdmin.rpc("get_admin_tickets");
+  const { data: rows, error } = await supabaseAdmin
+    .from("bookings")
+    .select("id, student_name, phone, txn_ref, amount, status, created_at, tickets(ticket_number)")
+    .in("status", ["pending", "sold", "held", "rejected"])
+    .order("created_at", { ascending: false })
+    .limit(500);
   if (error) throw new Error(error.message);
-  const rows = (ticketRows ?? []) as AdminTicketRow[];
 
-  const maxBatch = rows.reduce((m, r) => Math.max(m, r.batch_number), 1);
-  const batchStart = (maxBatch - 1) * batchSize + 1;
-  const batchEnd = maxBatch * batchSize;
-
-  const soldCount = rows.filter((r) => r.status === "sold").length;
-  const soldInCurrentBatch = rows.filter(
-    (r) => r.status === "sold" && r.ticket_number >= batchStart && r.ticket_number <= batchEnd,
-  ).length;
-
-  const byHolder: Record<
-    string,
-    {
-      student_name: string;
-      student_phone: string;
-      transaction_id: string | null;
-      confirmed_at: string | null;
-      status: string;
-      numbers: number[];
-    }
-  > = {};
-
-  for (const r of rows) {
-    if (r.status === "available") continue;
-    if (!r.student_name) continue;
-    const key = `${r.student_name}::${r.student_phone}`;
-    if (!byHolder[key]) {
-      byHolder[key] = {
-        student_name: r.student_name,
-        student_phone: r.student_phone,
-        transaction_id: r.transaction_id,
-        confirmed_at: r.confirmed_at,
-        status: r.status,
-        numbers: [],
-      };
-    }
-    byHolder[key].numbers.push(r.ticket_number);
-    if (r.status === "pending") byHolder[key].status = "pending";
-    else if (r.status === "sold" && byHolder[key].status !== "pending")
-      byHolder[key].status = "sold";
-    else if (r.status === "held" && byHolder[key].status === "available")
-      byHolder[key].status = "held";
-    if (r.transaction_id) byHolder[key].transaction_id = r.transaction_id;
-    if (r.confirmed_at) byHolder[key].confirmed_at = r.confirmed_at;
-  }
-
-  let bookings: AdminBooking[] = Object.values(byHolder).map((h) => ({
-    id: h.numbers.sort((a, b) => a - b).join(","),
-    student_name: h.student_name,
-    phone: h.student_phone,
-    txn_ref: h.transaction_id,
-    amount: h.numbers.length * ticketPrice,
-    status: h.status,
-    numbers: h.numbers.sort((a, b) => a - b),
+  let bookings: AdminBooking[] = (rows ?? []).map((r) => ({
+    id: r.id,
+    student_name: r.student_name,
+    phone: r.phone,
+    txn_ref: r.txn_ref,
+    amount: r.amount,
+    status: r.status,
+    created_at: r.created_at,
+    numbers: ((r.tickets ?? []) as { ticket_number: number }[])
+      .map((t) => t.ticket_number)
+      .sort((a, b) => a - b),
   }));
 
   const pendingTotal = bookings.filter((b) => b.status === "pending").length;
@@ -129,18 +82,32 @@ async function loadAdmin(search: string): Promise<AdminData> {
     );
   }
 
+  const { count: soldCount } = await supabaseAdmin
+    .from("tickets")
+
+    .select("ticket_number", { count: "exact", head: true })
+    .eq("status", "sold");
+
+  const { count: soldInCurrentBatch } = await supabaseAdmin
+    .from("tickets")
+    .select("ticket_number", { count: "exact", head: true })
+    .eq("status", "sold")
+    .gte("ticket_number", state.batch_start)
+    .lte("ticket_number", state.batch_end);
+
   return {
     stats: {
-      sold: soldCount,
-      remaining: batchSize - soldInCurrentBatch,
-      collected: soldCount * ticketPrice,
+      sold: soldCount ?? 0,
+      remaining: state.batch_size - (soldInCurrentBatch ?? 0),
+      collected: (soldCount ?? 0) * state.ticket_price,
       pending: pendingTotal,
-      batch_number: maxBatch,
-      batch_start: batchStart,
-      batch_end: batchEnd,
-      ticket_price: ticketPrice,
+
+      batch_number: state.batch_number,
+      batch_start: state.batch_start,
+      batch_end: state.batch_end,
+      ticket_price: state.ticket_price,
     },
-    bookings: bookings.sort((a, b) => (a.status === "pending" ? -1 : 0) - (b.status === "pending" ? -1 : 0)),
+    bookings,
   };
 }
 
@@ -156,9 +123,16 @@ export const adminConfirm = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     checkPassword(data.password);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const numbers = parseNumbersFromId(data.bookingId);
-    const { error } = await supabaseAdmin.rpc("admin_confirm", { p_numbers: numbers });
+    const { error } = await supabaseAdmin
+      .from("bookings")
+      .update({ status: "sold", confirmed_at: new Date().toISOString() })
+      .eq("id", data.bookingId);
     if (error) throw new Error(error.message);
+    const { error: tErr } = await supabaseAdmin
+      .from("tickets")
+      .update({ status: "sold", held_until: null })
+      .eq("booking_id", data.bookingId);
+    if (tErr) throw new Error(tErr.message);
     return { ok: true as const };
   });
 
@@ -167,15 +141,15 @@ export const adminReject = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     checkPassword(data.password);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const numbers = parseNumbersFromId(data.bookingId);
-    const { error } = await supabaseAdmin.rpc("admin_reject", { p_numbers: numbers });
+    const { error } = await supabaseAdmin
+      .from("tickets")
+      .delete()
+      .eq("booking_id", data.bookingId);
     if (error) throw new Error(error.message);
+    const { error: bErr } = await supabaseAdmin
+      .from("bookings")
+      .update({ status: "rejected" })
+      .eq("id", data.bookingId);
+    if (bErr) throw new Error(bErr.message);
     return { ok: true as const };
   });
-
-function parseNumbersFromId(id: string): number[] {
-  return id
-    .split(",")
-    .map((n) => parseInt(n.trim(), 10))
-    .filter((n) => !isNaN(n));
-}
