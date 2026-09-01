@@ -51,8 +51,7 @@ export function saveMyName(name: string) {
 export async function fetchRaffleState(): Promise<RaffleState> {
   const { data, error } = await supabase.rpc("get_raffle_state");
   if (error) throw error;
-  const rows = data as unknown as RaffleState[];
-  return rows[0];
+  return data as unknown as RaffleState;
 }
 
 export async function holdTickets(input: {
