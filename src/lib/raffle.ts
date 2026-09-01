@@ -28,6 +28,20 @@ export type Booking = {
 };
 
 export const BOOKING_KEY = "physioday.booking_id";
+export const BOOKING_TOKEN_KEY = "physioday.booking_token";
+
+export function getBookingToken(): string {
+  if (typeof localStorage === "undefined") return "";
+  return localStorage.getItem(BOOKING_TOKEN_KEY) ?? "";
+}
+
+export function saveBookingToken(token: string) {
+  localStorage.setItem(BOOKING_TOKEN_KEY, token);
+}
+
+export function clearBookingToken() {
+  localStorage.removeItem(BOOKING_TOKEN_KEY);
+}
 
 export async function fetchRaffleState(): Promise<RaffleState> {
   const { data, error } = await supabase.rpc("raffle_state");
@@ -50,31 +64,42 @@ export async function holdTickets(input: { name: string; phone: string; numbers:
     p_numbers: input.numbers,
   });
   if (error) throw new Error(friendlyError(error.message));
-  return data as unknown as {
+  const res = data as unknown as {
     booking_id: string;
+    access_token: string;
     expires_at: string;
     amount: number;
     numbers: number[];
   };
+  saveBookingToken(res.access_token);
+  return res;
 }
 
 export async function submitPayment(bookingId: string, txnRef: string) {
   const { error } = await supabase.rpc("submit_payment", {
     p_booking_id: bookingId,
+    p_token: getBookingToken(),
     p_txn_ref: txnRef,
   });
   if (error) throw new Error(friendlyError(error.message));
 }
 
 export async function cancelBooking(bookingId: string) {
-  await supabase.rpc("cancel_booking", { p_booking_id: bookingId });
+  await supabase.rpc("cancel_booking", {
+    p_booking_id: bookingId,
+    p_token: getBookingToken(),
+  });
 }
 
 export async function fetchBooking(bookingId: string): Promise<Booking | null> {
-  const { data, error } = await supabase.rpc("get_booking", { p_booking_id: bookingId });
+  const { data, error } = await supabase.rpc("get_booking", {
+    p_booking_id: bookingId,
+    p_token: getBookingToken(),
+  });
   if (error) throw error;
   return (data as unknown as Booking) ?? null;
 }
+
 
 export function friendlyError(raw: string): string {
   if (raw.includes("NUMBER_TAKEN"))
