@@ -7,8 +7,6 @@ export type Json =
   | Json[]
 
 export type Database = {
-  // Allows to automatically instantiate createClient with right options
-  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
     PostgrestVersion: "14.5"
   }
@@ -16,122 +14,155 @@ export type Database = {
     Tables: {
       app_settings: {
         Row: {
-          batch_size: number
-          booking_closes_at: string
-          id: number
-          ticket_price: number
+          key: string
+          value: string
         }
         Insert: {
-          batch_size?: number
-          booking_closes_at?: string
-          id?: number
-          ticket_price?: number
+          key: string
+          value: string
         }
         Update: {
-          batch_size?: number
-          booking_closes_at?: string
-          id?: number
-          ticket_price?: number
-        }
-        Relationships: []
-      }
-      bookings: {
-        Row: {
-          access_token: string
-          amount: number
-          confirmed_at: string | null
-          created_at: string
-          held_until: string
-          id: string
-          phone: string
-          status: Database["public"]["Enums"]["booking_status"]
-          student_name: string
-          txn_ref: string | null
-        }
-        Insert: {
-          access_token?: string
-          amount?: number
-          confirmed_at?: string | null
-          created_at?: string
-          held_until?: string
-          id?: string
-          phone: string
-          status?: Database["public"]["Enums"]["booking_status"]
-          student_name: string
-          txn_ref?: string | null
-        }
-        Update: {
-          access_token?: string
-          amount?: number
-          confirmed_at?: string | null
-          created_at?: string
-          held_until?: string
-          id?: string
-          phone?: string
-          status?: Database["public"]["Enums"]["booking_status"]
-          student_name?: string
-          txn_ref?: string | null
+          key?: string
+          value?: string
         }
         Relationships: []
       }
       tickets: {
         Row: {
-          booking_id: string
-          created_at: string
-          held_until: string | null
-          status: Database["public"]["Enums"]["booking_status"]
           ticket_number: number
+          batch_number: number
+          status: string
+          held_until: string | null
+          created_at: string
         }
         Insert: {
-          booking_id: string
-          created_at?: string
-          held_until?: string | null
-          status?: Database["public"]["Enums"]["booking_status"]
           ticket_number: number
+          batch_number: number
+          status?: string
+          held_until?: string | null
+          created_at?: string
         }
         Update: {
-          booking_id?: string
-          created_at?: string
-          held_until?: string | null
-          status?: Database["public"]["Enums"]["booking_status"]
           ticket_number?: number
+          batch_number?: number
+          status?: string
+          held_until?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
+      ticket_holders: {
+        Row: {
+          ticket_number: number
+          student_name: string
+          student_phone: string
+          transaction_id: string | null
+          confirmed_at: string | null
+        }
+        Insert: {
+          ticket_number: number
+          student_name: string
+          student_phone: string
+          transaction_id?: string | null
+          confirmed_at?: string | null
+        }
+        Update: {
+          ticket_number?: number
+          student_name?: string
+          student_phone?: string
+          transaction_id?: string | null
+          confirmed_at?: string | null
         }
         Relationships: [
           {
-            foreignKeyName: "tickets_booking_id_fkey"
-            columns: ["booking_id"]
+            foreignKeyName: "ticket_holders_ticket_number_fkey"
+            columns: ["ticket_number"]
             isOneToOne: false
-            referencedRelation: "bookings"
-            referencedColumns: ["id"]
+            referencedRelation: "tickets"
+            referencedColumns: ["ticket_number"]
           },
         ]
+      }
+      admins: {
+        Row: {
+          user_id: string
+        }
+        Insert: {
+          user_id: string
+        }
+        Update: {
+          user_id?: string
+        }
+        Relationships: []
       }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      cancel_booking: {
-        Args: { p_booking_id: string; p_token: string }
-        Returns: Json
-      }
-      get_booking: {
-        Args: { p_booking_id: string; p_token: string }
-        Returns: Json
+      get_raffle_state: {
+        Args: Record<string, never>
+        Returns: {
+          ticket_price: number
+          batch_size: number
+          booking_closes_at: string
+          total_sold: number
+          batch_start: number
+          batch_end: number
+          batch_number: number
+          taken: Json
+        }[]
       }
       hold_tickets: {
-        Args: { p_name: string; p_numbers: number[]; p_phone: string }
-        Returns: Json
+        Args: { p_numbers: number[]; p_name: string; p_phone: string }
+        Returns: {
+          ticket_number: number
+          batch_number: number
+          status: string
+          held_until: string | null
+          created_at: string
+        }[]
       }
-      raffle_state: { Args: never; Returns: Json }
-      release_expired_holds: { Args: never; Returns: undefined }
       submit_payment: {
-        Args: { p_booking_id: string; p_token: string; p_txn_ref: string }
-        Returns: Json
+        Args: { p_numbers: number[]; p_transaction_id: string }
+        Returns: undefined
+      }
+      cancel_hold: {
+        Args: { p_numbers: number[] }
+        Returns: undefined
+      }
+      release_expired_holds: {
+        Args: Record<string, never>
+        Returns: undefined
+      }
+      get_admin_tickets: {
+        Args: Record<string, never>
+        Returns: {
+          ticket_number: number
+          batch_number: number
+          status: string
+          held_until: string | null
+          student_name: string | null
+          student_phone: string | null
+          transaction_id: string | null
+          confirmed_at: string | null
+        }[]
+      }
+      admin_confirm: {
+        Args: { p_numbers: number[] }
+        Returns: undefined
+      }
+      admin_reject: {
+        Args: { p_numbers: number[] }
+        Returns: undefined
+      }
+      create_batch: {
+        Args: { p_batch_num: number }
+        Returns: undefined
       }
     }
     Enums: {
-      booking_status: "held" | "pending" | "sold" | "rejected" | "expired"
+      [key: string]: never
     }
     CompositeTypes: {
       [_ in never]: never
@@ -258,8 +289,6 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {
-      booking_status: ["held", "pending", "sold", "rejected", "expired"],
-    },
+    Enums: {},
   },
 } as const
