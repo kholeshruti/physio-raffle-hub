@@ -7,17 +7,19 @@ import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
 import {
-  BOOKING_KEY,
   EVENT_NAME,
   MAX_PER_STUDENT,
-  cancelBooking,
-  clearBookingToken,
-  fetchBooking,
+  cancelHold,
+  clearMyNumbers,
   fetchRaffleState,
-  fetchTakenNumbers,
+  getMyName,
+  getMyNumbers,
   holdTickets,
   rupees,
+  saveMyName,
+  saveMyNumbers,
   submitPayment,
+  type TicketStatus,
 } from "@/lib/raffle";
 import { Countdown, useCountdown } from "@/components/raffle/Countdown";
 import { TicketGrid } from "@/components/raffle/TicketGrid";
@@ -59,29 +61,22 @@ function HomePage() {
   const [phone, setPhone] = useState("");
   const [txnRef, setTxnRef] = useState("");
   const [busy, setBusy] = useState(false);
-  const [bookingId, setBookingId] = useState<string | null>(null);
+  const [myNumbers, setMyNumbers] = useState<number[]>([]);
+  const [myName, setMyName] = useState("");
   const passRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setBookingId(localStorage.getItem(BOOKING_KEY));
+    setMyNumbers(getMyNumbers());
+    setMyName(getMyName());
   }, []);
 
   const stateQuery = useQuery({ queryKey: ["raffle-state"], queryFn: fetchRaffleState });
-  const takenQuery = useQuery({ queryKey: ["taken"], queryFn: fetchTakenNumbers });
-  const bookingQuery = useQuery({
-    queryKey: ["booking", bookingId],
-    queryFn: () => fetchBooking(bookingId as string),
-    enabled: !!bookingId,
-    refetchInterval: 8000,
-  });
 
   useEffect(() => {
     const channel = supabase
       .channel("tickets-live")
       .on("postgres_changes", { event: "*", schema: "public", table: "tickets" }, () => {
-        queryClient.invalidateQueries({ queryKey: ["taken"] });
         queryClient.invalidateQueries({ queryKey: ["raffle-state"] });
-        queryClient.invalidateQueries({ queryKey: ["booking"] });
       })
       .subscribe();
     return () => {
@@ -90,22 +85,25 @@ function HomePage() {
   }, [queryClient]);
 
   const state = stateQuery.data;
-  const taken = takenQuery.data ?? {};
-  const booking = bookingQuery.data ?? null;
+  const taken = state?.taken ?? {};
   const closing = useCountdown(state?.booking_closes_at ?? null);
   const bookingClosed = closing.ready && closing.closed;
 
   const soldInBatch = state
     ? Object.entries(taken).filter(
-        ([n, s]) => s === "sold" && Number(n) >= state.batch_start && Number(n) <= state.batch_end,
+        ([n, s]) =>
+          s === "sold" && Number(n) >= state.batch_start && Number(n) <= state.batch_end,
       ).length
     : 0;
   const remaining = state ? state.batch_size - soldInBatch : 0;
-  const price = state?.ticket_price ?? 200;
+  const price = state?.ticket_price ?? 10;
 
+  const myStatuses = myNumbers.map((n) => taken[String(n)]).filter(Boolean);
+  const activeStatus: TicketStatus | undefined =
+    myStatuses.length > 0 ? (myStatuses[0] as TicketStatus) : undefined;
   const activeBooking =
-    booking && (booking.status === "held" || booking.status === "pending" || booking.status === "sold")
-      ? booking
+    activeStatus === "held" || activeStatus === "pending" || activeStatus === "sold"
+      ? { numbers: myNumbers, status: activeStatus, name: myName }
       : null;
 
   function toggle(n: number) {
@@ -123,15 +121,17 @@ function HomePage() {
     if (selected.length === 0) return;
     setBusy(true);
     try {
-      const res = await holdTickets({ name, phone, numbers: selected });
-      localStorage.setItem(BOOKING_KEY, res.booking_id);
-      setBookingId(res.booking_id);
+      await holdTickets({ name, phone, numbers: selected });
+      setMyNumbers(selected);
+      saveMyNumbers(selected);
+      setMyName(name);
+      saveMyName(name);
       setSelected([]);
       toast.success("Numbers held for 15 minutes — complete your payment.");
-      queryClient.invalidateQueries({ queryKey: ["taken"] });
+      queryClient.invalidateQueries({ queryKey: ["raffle-state"] });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not hold those numbers.");
-      queryClient.invalidateQueries({ queryKey: ["taken"] });
+      queryClient.invalidateQueries({ queryKey: ["raffle-state"] });
     } finally {
       setBusy(false);
     }
@@ -141,10 +141,10 @@ function HomePage() {
     if (!activeBooking) return;
     setBusy(true);
     try {
-      await submitPayment(activeBooking.id, txnRef);
+      await submitPayment(activeBooking.numbers, txnRef);
       setTxnRef("");
       toast.success("Sent for confirmation.");
-      bookingQuery.refetch();
+      queryClient.invalidateQueries({ queryKey: ["raffle-state"] });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not submit.");
     } finally {
@@ -154,19 +154,25 @@ function HomePage() {
 
   async function onCancel() {
     if (!activeBooking) return;
-    await cancelBooking(activeBooking.id);
-    localStorage.removeItem(BOOKING_KEY);
-    clearBookingToken();
-    setBookingId(null);
-    queryClient.invalidateQueries({ queryKey: ["taken"] });
+    setBusy(true);
+    try {
+      await cancelHold(activeBooking.numbers);
+      clearMyNumbers();
+      setMyNumbers([]);
+      setMyName("");
+      queryClient.invalidateQueries({ queryKey: ["raffle-state"] });
+    } catch {
+      toast.error("Could not release those numbers.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   function startOver() {
-    localStorage.removeItem(BOOKING_KEY);
-    clearBookingToken();
-    setBookingId(null);
+    clearMyNumbers();
+    setMyNumbers([]);
+    setMyName("");
   }
-
 
   async function download(kind: "jpg" | "pdf") {
     if (!passRef.current) return;
@@ -265,7 +271,9 @@ function HomePage() {
 
       {activeBooking ? (
         <PaymentSection
-          booking={activeBooking}
+          numbers={activeBooking.numbers}
+          status={activeBooking.status}
+          holderName={activeBooking.name}
           txnRef={txnRef}
           setTxnRef={setTxnRef}
           busy={busy}
@@ -274,9 +282,13 @@ function HomePage() {
           onStartOver={startOver}
           onDownload={download}
           passRef={passRef}
+          price={price}
         />
       ) : (
-        <section id="grid" className="max-w-6xl mx-auto px-5 pb-16 animate-rise [animation-delay:220ms]">
+        <section
+          id="grid"
+          className="max-w-6xl mx-auto px-5 pb-16 animate-rise [animation-delay:220ms]"
+        >
           <div className="bg-cream rounded-3xl ring-1 ring-foreground/10 p-5 md:p-8">
             <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
@@ -429,7 +441,9 @@ function HomePage() {
 }
 
 type PaymentProps = {
-  booking: NonNullable<Awaited<ReturnType<typeof fetchBooking>>>;
+  numbers: number[];
+  status: TicketStatus;
+  holderName: string;
   txnRef: string;
   setTxnRef: (v: string) => void;
   busy: boolean;
@@ -438,10 +452,13 @@ type PaymentProps = {
   onStartOver: () => void;
   onDownload: (kind: "jpg" | "pdf") => void;
   passRef: React.RefObject<HTMLDivElement | null>;
+  price: number;
 };
 
 function PaymentSection({
-  booking,
+  numbers,
+  status,
+  holderName,
   txnRef,
   setTxnRef,
   busy,
@@ -450,14 +467,15 @@ function PaymentSection({
   onStartOver,
   onDownload,
   passRef,
+  price,
 }: PaymentProps) {
-  const hold = useCountdown(booking.status === "held" ? booking.held_until : null);
+  const amount = numbers.length * price;
 
   return (
     <section id="grid" className="max-w-6xl mx-auto px-5 pb-16 animate-rise">
       <div className="grid md:grid-cols-12 gap-5">
         <div className="md:col-span-7 bg-cream rounded-3xl ring-1 ring-foreground/10 p-6">
-          {booking.status === "sold" ? (
+          {status === "sold" ? (
             <>
               <span className="inline-flex items-center gap-2 rounded-full bg-teal/15 text-teal px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider">
                 Confirmed · Sold
@@ -493,16 +511,11 @@ function PaymentSection({
               </div>
               <div className="mt-6 overflow-x-auto">
                 <div className="origin-top-left scale-[0.62] sm:scale-75 w-fit">
-                  <TicketPass
-                    ref={passRef}
-                    name={booking.student_name}
-                    numbers={booking.numbers}
-                    bookingId={booking.id}
-                  />
+                  <TicketPass ref={passRef} name={holderName} numbers={numbers} />
                 </div>
               </div>
             </>
-          ) : booking.status === "pending" ? (
+          ) : status === "pending" ? (
             <>
               <span className="inline-flex items-center gap-2 rounded-full bg-marigold/25 text-foreground px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider">
                 <span className="size-2 rounded-full bg-tomato animate-pulse-live" /> Pending
@@ -512,9 +525,9 @@ function PaymentSection({
                 Waiting for confirmation
               </h2>
               <p className="mt-2 text-sm text-muted-foreground max-w-[46ch]">
-                We received reference <span className="font-mono">{booking.txn_ref}</span>. An
-                organiser is checking the bank account. Your ticket is not final and cannot be
-                downloaded until it is confirmed. Keep this page open — it updates by itself.
+                We received your payment reference. An organiser is checking the bank account. Your
+                ticket is not final and cannot be downloaded until it is confirmed. Keep this page
+                open — it updates by itself.
               </p>
               <button
                 type="button"
@@ -543,7 +556,7 @@ function PaymentSection({
                     Amount to pay
                   </p>
                   <p className="font-display font-black text-4xl tabular-nums">
-                    {rupees(booking.amount)}
+                    {rupees(amount)}
                   </p>
                   <label className="block mt-4">
                     <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
@@ -583,34 +596,21 @@ function PaymentSection({
           <dl className="mt-5 space-y-2 text-sm">
             <div className="flex justify-between border-b border-ink-foreground/15 pb-2">
               <dt className="text-ink-foreground/60">Student</dt>
-              <dd className="font-semibold">{booking.student_name}</dd>
+              <dd className="font-semibold">{holderName || "—"}</dd>
             </div>
             <div className="flex justify-between border-b border-ink-foreground/15 pb-2">
               <dt className="text-ink-foreground/60">Numbers</dt>
-              <dd className="font-mono font-semibold">{booking.numbers.join(" · ")}</dd>
+              <dd className="font-mono font-semibold">{numbers.join(" · ")}</dd>
             </div>
             <div className="flex justify-between border-b border-ink-foreground/15 pb-2">
               <dt className="text-ink-foreground/60">Amount</dt>
-              <dd className="font-semibold">{rupees(booking.amount)}</dd>
+              <dd className="font-semibold">{rupees(amount)}</dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-ink-foreground/60">Status</dt>
-              <dd className="font-semibold capitalize text-marigold">{booking.status}</dd>
+              <dd className="font-semibold capitalize text-marigold">{status}</dd>
             </div>
           </dl>
-          {booking.status === "held" && (
-            <div className="mt-6">
-              <p className="font-mono text-[11px] uppercase tracking-wider text-ink-foreground/60">
-                Held for
-              </p>
-              <p className="font-display font-black text-4xl tabular-nums">
-                {hold.closed
-                  ? "00:00"
-                  : `${String(hold.mins + hold.hours * 60).padStart(2, "0")}:${String(hold.secs).padStart(2, "0")}`}
-              </p>
-              <p className="text-[12px] text-ink-foreground/60">then auto-released</p>
-            </div>
-          )}
         </div>
       </div>
     </section>

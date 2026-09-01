@@ -2,9 +2,9 @@ import { forwardRef } from "react";
 import { EVENT_NAME } from "@/lib/raffle";
 
 type Props = {
-  name: string;
+  name?: string;
   numbers: number[];
-  bookingId: string;
+  bookingId?: string;
 };
 
 export const TicketPass = forwardRef<HTMLDivElement, Props>(function TicketPass(
@@ -40,7 +40,7 @@ export const TicketPass = forwardRef<HTMLDivElement, Props>(function TicketPass(
         <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
           Issued to
         </p>
-        <p className="font-display font-black text-4xl tracking-tight mt-1">{name}</p>
+        <p className="font-display font-black text-4xl tracking-tight mt-1">{name || "—"}</p>
       </div>
 
       <div className="mt-6">
@@ -61,7 +61,7 @@ export const TicketPass = forwardRef<HTMLDivElement, Props>(function TicketPass(
 
       <div className="mt-8 flex items-end justify-between border-t border-dashed border-foreground/25 pt-5">
         <p className="font-mono text-[10px] text-muted-foreground">
-          Ref {bookingId.slice(0, 8).toUpperCase()} · Payment confirmed
+          {(bookingId ?? "").slice(0, 8).toUpperCase() || "N/A"} · Payment confirmed
         </p>
         <p className="font-display font-semibold italic text-lg text-tomato">
           Good luck at the draw!

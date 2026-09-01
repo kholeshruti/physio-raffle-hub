@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 type Props = {
   start: number;
   end: number;
-  taken: Record<number, TicketStatus>;
+  taken: Record<string, TicketStatus>;
   selected: number[];
   disabled?: boolean;
   onToggle: (n: number) => void;
@@ -17,7 +17,7 @@ export function TicketGrid({ start, end, taken, selected, disabled, onToggle }: 
   return (
     <div className="mt-6 grid grid-cols-5 sm:grid-cols-10 gap-2 sm:gap-2.5">
       {numbers.map((n) => {
-        const status = taken[n];
+        const status = taken[String(n)];
         const isSold = status === "sold";
         const isHeld = status === "held" || status === "pending";
         const isSelected = selected.includes(n);
