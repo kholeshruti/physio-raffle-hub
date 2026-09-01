@@ -11,6 +11,7 @@ import {
   EVENT_NAME,
   MAX_PER_STUDENT,
   cancelBooking,
+  clearBookingToken,
   fetchBooking,
   fetchRaffleState,
   fetchTakenNumbers,
