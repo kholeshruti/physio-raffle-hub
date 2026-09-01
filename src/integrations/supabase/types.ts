@@ -37,6 +37,7 @@ export type Database = {
       }
       bookings: {
         Row: {
+          access_token: string
           amount: number
           confirmed_at: string | null
           created_at: string
@@ -48,6 +49,7 @@ export type Database = {
           txn_ref: string | null
         }
         Insert: {
+          access_token?: string
           amount?: number
           confirmed_at?: string | null
           created_at?: string
@@ -59,6 +61,7 @@ export type Database = {
           txn_ref?: string | null
         }
         Update: {
+          access_token?: string
           amount?: number
           confirmed_at?: string | null
           created_at?: string
@@ -108,8 +111,14 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      cancel_booking: { Args: { p_booking_id: string }; Returns: Json }
-      get_booking: { Args: { p_booking_id: string }; Returns: Json }
+      cancel_booking: {
+        Args: { p_booking_id: string; p_token: string }
+        Returns: Json
+      }
+      get_booking: {
+        Args: { p_booking_id: string; p_token: string }
+        Returns: Json
+      }
       hold_tickets: {
         Args: { p_name: string; p_numbers: number[]; p_phone: string }
         Returns: Json
@@ -117,7 +126,7 @@ export type Database = {
       raffle_state: { Args: never; Returns: Json }
       release_expired_holds: { Args: never; Returns: undefined }
       submit_payment: {
-        Args: { p_booking_id: string; p_txn_ref: string }
+        Args: { p_booking_id: string; p_token: string; p_txn_ref: string }
         Returns: Json
       }
     }
