@@ -155,14 +155,17 @@ function HomePage() {
     if (!activeBooking) return;
     await cancelBooking(activeBooking.id);
     localStorage.removeItem(BOOKING_KEY);
+    clearBookingToken();
     setBookingId(null);
     queryClient.invalidateQueries({ queryKey: ["taken"] });
   }
 
   function startOver() {
     localStorage.removeItem(BOOKING_KEY);
+    clearBookingToken();
     setBookingId(null);
   }
+
 
   async function download(kind: "jpg" | "pdf") {
     if (!passRef.current) return;
