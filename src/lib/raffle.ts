@@ -50,15 +50,8 @@ export function saveMyName(name: string) {
 
 export async function fetchRaffleState(): Promise<RaffleState> {
   const { data, error } = await supabase.rpc("get_raffle_state");
-  if (error) {
-    console.error("[fetchRaffleState] RPC error:", error.message);
-    throw error;
-  }
+  if (error) throw error;
   const rows = data as unknown as RaffleState[];
-  if (!rows || rows.length === 0) {
-    console.error("[fetchRaffleState] RPC returned empty result");
-    throw new Error("No raffle state data returned from server.");
-  }
   return rows[0];
 }
 
@@ -72,10 +65,7 @@ export async function holdTickets(input: {
     p_name: input.name,
     p_phone: input.phone,
   });
-  if (error) {
-    console.error("[holdTickets] RPC error:", error.message);
-    throw new Error(friendlyError(error.message));
-  }
+  if (error) throw new Error(friendlyError(error.message));
   const rows = (data ?? []) as { held_until: string | null }[];
   saveMyNumbers(input.numbers);
   saveMyName(input.name);
