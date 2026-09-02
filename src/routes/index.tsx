@@ -8,7 +8,10 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import {
   BOOKING_KEY,
+  BATCH_SIZE,
   EVENT_NAME,
+  HOLD_TTL_MINUTES,
+  MAX_BATCHES,
   MAX_PER_STUDENT,
   cancelBooking,
   clearBookingToken,
@@ -60,6 +63,7 @@ function HomePage() {
   const [txnRef, setTxnRef] = useState("");
   const [busy, setBusy] = useState(false);
   const [bookingId, setBookingId] = useState<string | null>(null);
+  const [bookingSnapshot, setBookingSnapshot] = useState<Awaited<ReturnType<typeof fetchBooking>>>(null);
   const passRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -91,8 +95,12 @@ function HomePage() {
 
   const state = stateQuery.data;
   const taken = takenQuery.data ?? {};
-  const booking = bookingQuery.data ?? null;
+  const booking = bookingQuery.data ?? bookingSnapshot ?? null;
   const closing = useCountdown(state?.booking_closes_at ?? null);
+
+  useEffect(() => {
+    if (bookingQuery.data) setBookingSnapshot(bookingQuery.data);
+  }, [bookingQuery.data]);
   const bookingClosed = closing.ready && closing.closed;
 
   const soldInBatch = state
@@ -100,7 +108,8 @@ function HomePage() {
         ([n, s]) => s === "sold" && Number(n) >= state.batch_start && Number(n) <= state.batch_end,
       ).length
     : 0;
-  const remaining = state ? state.batch_size - soldInBatch : 0;
+  const remaining = state ? Math.max(0, state.batch_size - soldInBatch) : 0;
+  const allTicketsSold = state ? state.total_sold >= state.batch_size * MAX_BATCHES : false;
   const price = state?.ticket_price ?? 200;
 
   const activeBooking =
@@ -120,14 +129,32 @@ function HomePage() {
   }
 
   async function onHold() {
+    if (allTicketsSold) {
+      toast.error("All tickets are sold out.");
+      return;
+    }
     if (selected.length === 0) return;
     setBusy(true);
     try {
       const res = await holdTickets({ name, phone, numbers: selected });
+      const optimisticBooking = {
+        id: res.booking_id,
+        student_name: name,
+        phone,
+        txn_ref: null,
+        amount: res.amount,
+        status: "held" as const,
+        held_until: res.expires_at,
+        created_at: new Date().toISOString(),
+        numbers: [...selected],
+      } as NonNullable<Awaited<ReturnType<typeof fetchBooking>>>;
+
       localStorage.setItem(BOOKING_KEY, res.booking_id);
+      queryClient.setQueryData(["booking", res.booking_id], optimisticBooking);
+      setBookingSnapshot(optimisticBooking);
       setBookingId(res.booking_id);
       setSelected([]);
-      toast.success("Numbers held for 15 minutes — complete your payment.");
+      toast.success(`Numbers held for ${HOLD_TTL_MINUTES} minutes — complete your payment.`);
       queryClient.invalidateQueries({ queryKey: ["taken"] });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not hold those numbers.");
@@ -142,9 +169,11 @@ function HomePage() {
     setBusy(true);
     try {
       await submitPayment(activeBooking.id, txnRef);
+      const nextBooking = { ...activeBooking, txn_ref: txnRef, status: "pending" as const };
+      setBookingSnapshot(nextBooking);
+      queryClient.setQueryData(["booking", activeBooking.id], nextBooking);
       setTxnRef("");
       toast.success("Sent for confirmation.");
-      bookingQuery.refetch();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not submit.");
     } finally {
@@ -154,16 +183,26 @@ function HomePage() {
 
   async function onCancel() {
     if (!activeBooking) return;
-    await cancelBooking(activeBooking.id);
-    localStorage.removeItem(BOOKING_KEY);
-    clearBookingToken();
-    setBookingId(null);
-    queryClient.invalidateQueries({ queryKey: ["taken"] });
+    setBusy(true);
+    try {
+      await cancelBooking(activeBooking.id);
+      localStorage.removeItem(BOOKING_KEY);
+      clearBookingToken();
+      setBookingSnapshot(null);
+      setBookingId(null);
+      await queryClient.refetchQueries({ queryKey: ["taken"] });
+      toast.success("Your numbers are available again.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not release your numbers.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   function startOver() {
     localStorage.removeItem(BOOKING_KEY);
     clearBookingToken();
+    setBookingSnapshot(null);
     setBookingId(null);
   }
 
@@ -214,8 +253,8 @@ function HomePage() {
           </div>
           <div className="flex items-center gap-4 text-sm">
             <span className="hidden sm:flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
-              <span className="size-2 rounded-full bg-teal animate-pulse-live" /> LIVE · Batch{" "}
-              {String(state?.batch_number ?? 1).padStart(2, "0")}
+              <span className="size-2 rounded-full bg-teal animate-pulse-live" /> LIVE ·{" "}
+              {allTicketsSold ? "Sold out" : `Batch ${String(state?.batch_number ?? 1).padStart(2, "0")}`}
             </span>
             <Link
               to="/admin"
@@ -231,7 +270,7 @@ function HomePage() {
         <div className="animate-rise">
           <div className="inline-flex items-center gap-2 rounded-full bg-cream border border-foreground/10 px-3 py-1.5 text-[12px] font-mono uppercase tracking-wider text-muted-foreground">
             <span className="size-2 rounded-full bg-tomato animate-pulse-live" /> Live raffle book ·{" "}
-            {state?.batch_size ?? 100} tickets
+            {allTicketsSold ? `${MAX_BATCHES * (state?.batch_size ?? BATCH_SIZE)} tickets` : `${state?.batch_size ?? 100} tickets`}
           </div>
           <h1 className="mt-5 font-display font-black text-5xl md:text-7xl leading-[0.9] tracking-tight text-balance">
             Tear a number.
@@ -239,21 +278,28 @@ function HomePage() {
             <span className="italic font-semibold text-tomato">Win the big day.</span>
           </h1>
           <p className="mt-5 max-w-[46ch] text-pretty text-muted-foreground text-base md:text-lg">
-            {state?.batch_size ?? 100} numbered raffle tickets for the {EVENT_NAME}. Pick up to six,
-            pay by UPI, and your number is locked in. No refresh — it updates live.
+            {allTicketsSold
+              ? `All ${MAX_BATCHES * (state?.batch_size ?? BATCH_SIZE)} tickets for the ${EVENT_NAME} have been sold.`
+              : `${state?.batch_size ?? 100} numbered raffle tickets for the ${EVENT_NAME}. Pick up to six, pay by UPI, and your number is locked in. No refresh — it updates live.`}
           </p>
           <div className="mt-7 flex flex-wrap items-center gap-3">
-            <a
-              href="#grid"
-              className="inline-flex items-center gap-2 rounded-full bg-tomato text-tomato-foreground font-semibold px-6 py-3.5 hover:bg-tomato/90 active:translate-y-0.5 transition"
-            >
-              Book Your Raffle Ticket <span aria-hidden="true">→</span>
-            </a>
+            {!allTicketsSold ? (
+              <a
+                href="#grid"
+                className="inline-flex items-center gap-2 rounded-full bg-tomato text-tomato-foreground font-semibold px-6 py-3.5 hover:bg-tomato/90 active:translate-y-0.5 transition"
+              >
+                Book Your Raffle Ticket <span aria-hidden="true">→</span>
+              </a>
+            ) : (
+              <span className="inline-flex items-center gap-2 rounded-full bg-ink text-ink-foreground font-semibold px-6 py-3.5 opacity-80">
+                All tickets sold out
+              </span>
+            )}
             <span className="inline-flex items-center gap-2 rounded-full bg-cream border border-foreground/10 px-4 py-3.5 font-mono text-[13px]">
               {rupees(price)} / ticket
             </span>
             <span className="inline-flex items-center gap-2 rounded-full bg-cream border border-foreground/10 px-4 py-3.5 font-mono text-[13px]">
-              {remaining} left in this batch
+              {allTicketsSold ? "0 left in total" : `${remaining} left in this batch`}
             </span>
           </div>
         </div>
@@ -310,6 +356,13 @@ function HomePage() {
                   The raffle counter shut at 3:00 PM IST on 8 September 2026.
                 </p>
               </div>
+            ) : allTicketsSold ? (
+              <div className="mt-8 rounded-2xl bg-tomato/10 border border-tomato/25 p-8 text-center">
+                <p className="font-display font-black text-3xl">All tickets sold out</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  The raffle has reached its maximum of {MAX_BATCHES * (state?.batch_size ?? BATCH_SIZE)} tickets.
+                </p>
+              </div>
             ) : (
               <>
                 <TicketGrid
@@ -321,21 +374,21 @@ function HomePage() {
                 />
                 <p className="mt-4 text-center font-mono text-[12px] text-muted-foreground">
                   Batch {String(state?.batch_number ?? 1).padStart(2, "0")} ·{" "}
-                  {state?.batch_start ?? 1}–{state?.batch_end ?? 100} · a new batch of{" "}
-                  {state?.batch_size ?? 100} opens when this one sells out
+                  {state?.batch_start ?? 1}–{state?.batch_end ?? 100} · the raffle is capped at{" "}
+                  {MAX_BATCHES * (state?.batch_size ?? BATCH_SIZE)} total tickets
                 </p>
               </>
             )}
           </div>
 
-          {!bookingClosed && (
+          {!bookingClosed && !allTicketsSold && (
             <div className="mt-4 grid md:grid-cols-12 gap-4">
               <div className="md:col-span-7 bg-cream rounded-3xl ring-1 ring-foreground/10 p-6">
                 <h3 className="font-display font-black text-2xl tracking-tight">
                   Tell us who you are
                 </h3>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  We hold your numbers for 15 minutes while you pay.
+                  We hold your numbers for {HOLD_TTL_MINUTES} minutes while you pay.
                 </p>
                 <div className="mt-5 space-y-3">
                   <label className="block">
@@ -420,7 +473,9 @@ function HomePage() {
             <span className="font-display font-bold text-foreground">{EVENT_NAME}</span>
           </div>
           <p className="font-mono text-[12px]">
-            Batch expands by {state?.batch_size ?? 100} numbers when the current one sells out.
+            {allTicketsSold
+              ? "Maximum capacity reached — no further batches will open."
+              : `Batch expands by ${state?.batch_size ?? 100} numbers when the current one sells out.`}
           </p>
         </div>
       </footer>
@@ -509,7 +564,7 @@ function PaymentSection({
                 confirmation
               </span>
               <h2 className="mt-4 font-display font-black text-3xl tracking-tight">
-                Waiting for confirmation
+                Your numbers are on hold — waiting for organiser confirmation
               </h2>
               <p className="mt-2 text-sm text-muted-foreground max-w-[46ch]">
                 We received reference <span className="font-mono">{booking.txn_ref}</span>. An

@@ -2,6 +2,10 @@ import { supabase } from "@/integrations/supabase/client";
 
 export const EVENT_NAME = "Physio Day Celebration";
 export const MAX_PER_STUDENT = 6;
+export const BATCH_SIZE = 100;
+export const MAX_BATCHES = 4;
+export const MAX_TICKETS = BATCH_SIZE * MAX_BATCHES;
+export const HOLD_TTL_MINUTES = 15;
 
 export type TicketStatus = "held" | "pending" | "sold" | "rejected" | "expired";
 
@@ -32,10 +36,12 @@ export const BOOKING_TOKEN_KEY = "physioday.booking_token";
 
 export function getBookingToken(): string {
   if (typeof localStorage === "undefined") return "";
-  return localStorage.getItem(BOOKING_TOKEN_KEY) ?? "";
+  const token = localStorage.getItem(BOOKING_TOKEN_KEY) ?? "";
+  return token === "undefined" || token === "null" ? "" : token;
 }
 
 export function saveBookingToken(token: string) {
+  if (!token || token === "undefined" || token === "null") return;
   localStorage.setItem(BOOKING_TOKEN_KEY, token);
 }
 
@@ -71,6 +77,7 @@ export async function holdTickets(input: { name: string; phone: string; numbers:
     amount: number;
     numbers: number[];
   };
+  if (!res.access_token) throw new Error("Could not secure your booking. Please try again.");
   saveBookingToken(res.access_token);
   return res;
 }
@@ -85,16 +92,18 @@ export async function submitPayment(bookingId: string, txnRef: string) {
 }
 
 export async function cancelBooking(bookingId: string) {
-  await supabase.rpc("cancel_booking", {
+  const { error } = await supabase.rpc("cancel_booking", {
     p_booking_id: bookingId,
     p_token: getBookingToken(),
   });
+  if (error) throw new Error(friendlyError(error.message));
 }
 
 export async function fetchBooking(bookingId: string): Promise<Booking | null> {
+  const token = getBookingToken();
   const { data, error } = await supabase.rpc("get_booking", {
     p_booking_id: bookingId,
-    p_token: getBookingToken(),
+    p_token: token,
   });
   if (error) throw error;
   return (data as unknown as Booking) ?? null;
@@ -103,11 +112,12 @@ export async function fetchBooking(bookingId: string): Promise<Booking | null> {
 
 export function friendlyError(raw: string): string {
   if (raw.includes("NUMBER_TAKEN"))
-    return "Someone just grabbed one of those numbers. Pick again.";
+    return "This number is already held or sold. Pick another number.";
   if (raw.includes("BOOKING_CLOSED")) return "Booking is closed for this event.";
   if (raw.includes("INVALID_SELECTION")) return "Pick between 1 and 6 different numbers.";
   if (raw.includes("INVALID_NAME")) return "Please enter your full name.";
   if (raw.includes("INVALID_PHONE")) return "Please enter a valid phone number.";
+  if (raw.includes("ALL_TICKETS_SOLD")) return "All tickets are sold out.";
   if (raw.includes("OUT_OF_BATCH")) return "That number is no longer in the open batch.";
   if (raw.includes("HOLD_EXPIRED")) return "Your 15 minute hold expired. Please book again.";
   if (raw.includes("INVALID_TXN")) return "Enter the UPI transaction / reference ID.";
