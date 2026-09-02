@@ -13,6 +13,7 @@ import {
   HOLD_TTL_MINUTES,
   MAX_BATCHES,
   MAX_PER_STUDENT,
+  MAX_TICKETS,
   cancelBooking,
   clearBookingToken,
   fetchBooking,
@@ -25,6 +26,7 @@ import {
 import { Countdown, useCountdown } from "@/components/raffle/Countdown";
 import { TicketGrid } from "@/components/raffle/TicketGrid";
 import { TicketPass } from "@/components/raffle/TicketPass";
+import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -64,6 +66,7 @@ function HomePage() {
   const [busy, setBusy] = useState(false);
   const [bookingId, setBookingId] = useState<string | null>(null);
   const [bookingSnapshot, setBookingSnapshot] = useState<Awaited<ReturnType<typeof fetchBooking>>>(null);
+  const [ticketPage, setTicketPage] = useState(0);
   const passRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -103,14 +106,17 @@ function HomePage() {
   }, [bookingQuery.data]);
   const bookingClosed = closing.ready && closing.closed;
 
-  const soldInBatch = state
-    ? Object.entries(taken).filter(
-        ([n, s]) => s === "sold" && Number(n) >= state.batch_start && Number(n) <= state.batch_end,
-      ).length
-    : 0;
-  const remaining = state ? Math.max(0, state.batch_size - soldInBatch) : 0;
+  const takenCount = Object.entries(taken).filter(
+    ([n, status]) => Number(n) >= 1 && Number(n) <= MAX_TICKETS && ["held", "pending", "sold"].includes(status),
+  ).length;
+  const remaining = Math.max(0, MAX_TICKETS - takenCount);
   const allTicketsSold = state ? state.total_sold >= state.batch_size * MAX_BATCHES : false;
   const price = state?.ticket_price ?? 200;
+  const ticketRanges = Array.from({ length: MAX_BATCHES }, (_, index) => ({
+    start: index * BATCH_SIZE + 1,
+    end: (index + 1) * BATCH_SIZE,
+  }));
+  const activeTicketRange = ticketRanges[ticketPage] ?? ticketRanges[0];
 
   const activeBooking =
     booking && (booking.status === "held" || booking.status === "pending" || booking.status === "sold")
@@ -254,7 +260,7 @@ function HomePage() {
           <div className="flex items-center gap-4 text-sm">
             <span className="hidden sm:flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
               <span className="size-2 rounded-full bg-teal animate-pulse-live" /> LIVE ·{" "}
-              {allTicketsSold ? "Sold out" : `Batch ${String(state?.batch_number ?? 1).padStart(2, "0")}`}
+              {allTicketsSold ? "Sold out" : `${remaining} tickets available`}
             </span>
             <Link
               to="/admin"
@@ -270,7 +276,7 @@ function HomePage() {
         <div className="animate-rise">
           <div className="inline-flex items-center gap-2 rounded-full bg-cream border border-foreground/10 px-3 py-1.5 text-[12px] font-mono uppercase tracking-wider text-muted-foreground">
             <span className="size-2 rounded-full bg-tomato animate-pulse-live" /> Live raffle book ·{" "}
-            {allTicketsSold ? `${MAX_BATCHES * (state?.batch_size ?? BATCH_SIZE)} tickets` : `${state?.batch_size ?? 100} tickets`}
+              {MAX_TICKETS} tickets
           </div>
           <h1 className="mt-5 font-display font-black text-5xl md:text-7xl leading-[0.9] tracking-tight text-balance">
             Tear a number.
@@ -280,7 +286,7 @@ function HomePage() {
           <p className="mt-5 max-w-[46ch] text-pretty text-muted-foreground text-base md:text-lg">
             {allTicketsSold
               ? `All ${MAX_BATCHES * (state?.batch_size ?? BATCH_SIZE)} tickets for the ${EVENT_NAME} have been sold.`
-              : `${state?.batch_size ?? 100} numbered raffle tickets for the ${EVENT_NAME}. Pick up to six, pay by UPI, and your number is locked in. No refresh — it updates live.`}
+              : `${MAX_TICKETS} numbered raffle tickets for the ${EVENT_NAME}. Pick up to six from any range, pay by UPI, and your numbers are locked in. No refresh — it updates live.`}
           </p>
           <div className="mt-7 flex flex-wrap items-center gap-3">
             {!allTicketsSold ? (
@@ -299,7 +305,7 @@ function HomePage() {
               {rupees(price)} / ticket
             </span>
             <span className="inline-flex items-center gap-2 rounded-full bg-cream border border-foreground/10 px-4 py-3.5 font-mono text-[13px]">
-              {allTicketsSold ? "0 left in total" : `${remaining} left in this batch`}
+              {`${remaining} left in total`}
             </span>
           </div>
         </div>
@@ -326,11 +332,11 @@ function HomePage() {
           <div className="bg-cream rounded-3xl ring-1 ring-foreground/10 p-5 md:p-8">
             <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
-                <h2 className="font-display font-black text-3xl md:text-4xl tracking-tight">
+                  <h2 className="font-display font-black text-3xl md:text-4xl tracking-tight">
                   Pick your numbers
                 </h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Choose 1–{MAX_PER_STUDENT}. Held &amp; sold are locked for everyone, live.
+                  Choose 1–{MAX_PER_STUDENT} from any range. Held &amp; sold are locked for everyone, live.
                 </p>
               </div>
               <div className="flex items-center gap-5">
@@ -365,17 +371,37 @@ function HomePage() {
               </div>
             ) : (
               <>
+                <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-2" role="tablist" aria-label="Ticket ranges">
+                  {ticketRanges.map((range, index) => (
+                    <button
+                      key={range.start}
+                      type="button"
+                      role="tab"
+                      aria-selected={ticketPage === index}
+                      aria-controls="ticket-range-grid"
+                      onClick={() => setTicketPage(index)}
+                      className={cn(
+                        "rounded-xl border px-3 py-2.5 text-sm font-semibold transition-colors",
+                        ticketPage === index
+                          ? "border-tomato bg-tomato text-tomato-foreground"
+                          : "border-foreground/15 bg-background hover:bg-foreground/5",
+                      )}
+                    >
+                      {range.start}–{range.end}
+                    </button>
+                  ))}
+                </div>
                 <TicketGrid
-                  start={state?.batch_start ?? 1}
-                  end={state?.batch_end ?? 100}
+                  id="ticket-range-grid"
+                  start={activeTicketRange.start}
+                  end={activeTicketRange.end}
                   taken={taken}
                   selected={selected}
                   onToggle={toggle}
                 />
                 <p className="mt-4 text-center font-mono text-[12px] text-muted-foreground">
-                  Batch {String(state?.batch_number ?? 1).padStart(2, "0")} ·{" "}
-                  {state?.batch_start ?? 1}–{state?.batch_end ?? 100} · the raffle is capped at{" "}
-                  {MAX_BATCHES * (state?.batch_size ?? BATCH_SIZE)} total tickets
+                  Showing {activeTicketRange.start}–{activeTicketRange.end} · the raffle is capped at{" "}
+                  {MAX_TICKETS} total tickets
                 </p>
               </>
             )}
@@ -474,8 +500,8 @@ function HomePage() {
           </div>
           <p className="font-mono text-[12px]">
             {allTicketsSold
-              ? "Maximum capacity reached — no further batches will open."
-              : `Batch expands by ${state?.batch_size ?? 100} numbers when the current one sells out.`}
+              ? "Maximum capacity reached — no further tickets are available."
+              : `All ${MAX_TICKETS} ticket numbers are open for selection.`}
           </p>
         </div>
       </footer>

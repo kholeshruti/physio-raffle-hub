@@ -2,6 +2,7 @@ import type { TicketStatus } from "@/lib/raffle";
 import { cn } from "@/lib/utils";
 
 type Props = {
+  id?: string;
   start: number;
   end: number;
   taken: Record<number, TicketStatus>;
@@ -10,12 +11,12 @@ type Props = {
   onToggle: (n: number) => void;
 };
 
-export function TicketGrid({ start, end, taken, selected, disabled, onToggle }: Props) {
+export function TicketGrid({ id, start, end, taken, selected, disabled, onToggle }: Props) {
   const numbers: number[] = [];
   for (let n = start; n <= end; n++) numbers.push(n);
 
   return (
-    <div className="mt-6 grid grid-cols-5 sm:grid-cols-10 gap-2 sm:gap-2.5">
+    <div id={id} className="mt-6 grid grid-cols-5 sm:grid-cols-10 gap-2 sm:gap-2.5">
       {numbers.map((n) => {
         const status = taken[n];
         const isSold = status === "sold";
